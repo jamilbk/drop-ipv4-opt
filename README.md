@@ -5,6 +5,20 @@ A tiny XDP program to mitigate [CVE-2026-98432](https://nvd.nist.gov/vuln/detail
 A packet has IP options when its IHL (header length) field is greater than 5,
 which means the IPv4 header is longer than 20 bytes.
 
+## Why
+
+Mitigation for [CVE-2026-98432](https://nvd.nist.gov/vuln/detail/cve-2026-98432),
+a use-after-free in the kernel's TCP handshake handling of IPv4 options. It is
+only reachable from the network when a SYN carries IP options, so dropping those
+packets blocks the trigger until a patched kernel is available.
+
+> [!WARNING]
+> **This does not protect hosts using NetLabel/CIPSO** (SELinux or Smack with a
+> `CIPSOV4` mapping). On those hosts the kernel attaches IP options itself, so
+> the bug may be reachable with ordinary SYNs. Only a patched kernel fixes it.
+> Check with `netlabelctl map list`: if every entry is `UNLABELED`, you're not
+> affected by this case.
+
 ## What it does
 
 | Packet                       | Action     |
