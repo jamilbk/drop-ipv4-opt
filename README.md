@@ -10,9 +10,10 @@ A packet has IP options when its IHL (header length) field is greater than 5,
 which means the IPv4 header is longer than 20 bytes.
 
 > [!WARNING]
-> **This does not protect hosts using NetLabel/CIPSO** (SELinux or Smack with a
-> `CIPSOV4` mapping). On those hosts the kernel attaches IP options itself, so
-> the bug may be reachable with ordinary SYNs. Only a patched kernel fixes it.
+> **This may not protect hosts using NetLabel/CIPSO** (SELinux or Smack with a
+> `CIPSOV4` mapping). On those hosts the kernel can attach IP options itself, so
+> the bug may be reachable with ordinary SYNs. A patched kernel is the more
+> reliable fix there.
 > `netlabelctl map list` can help tell whether a host uses CIPSO: entries of
 > type `CIPSOV4` suggest it does.
 
