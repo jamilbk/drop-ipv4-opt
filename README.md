@@ -13,8 +13,8 @@ which means the IPv4 header is longer than 20 bytes.
 > **This does not protect hosts using NetLabel/CIPSO** (SELinux or Smack with a
 > `CIPSOV4` mapping). On those hosts the kernel attaches IP options itself, so
 > the bug may be reachable with ordinary SYNs. Only a patched kernel fixes it.
-> Check with `netlabelctl map list`: if every entry is `UNLABELED`, you're not
-> affected by this case.
+> `netlabelctl map list` can help tell whether a host uses CIPSO: entries of
+> type `CIPSOV4` suggest it does.
 
 ## What it does
 
