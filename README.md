@@ -1,16 +1,13 @@
 # drop-ipv4-opt
 
-A tiny XDP program to mitigate [CVE-2026-98432](https://nvd.nist.gov/vuln/detail/cve-2026-98432) by dropping IPv4 packets with options before they're passed up the network stack to the kernel.
+A tiny XDP program to mitigate [CVE-2026-98432](https://nvd.nist.gov/vuln/detail/cve-2026-98432),
+a use-after-free in the kernel's TCP handshake handling of IPv4 options. The bug
+is only reachable from the network when a SYN carries IP options, so this
+program drops IPv4 packets with options before they're passed up the network
+stack to the kernel, until a patched kernel is available.
 
 A packet has IP options when its IHL (header length) field is greater than 5,
 which means the IPv4 header is longer than 20 bytes.
-
-## Why
-
-Mitigation for [CVE-2026-98432](https://nvd.nist.gov/vuln/detail/cve-2026-98432),
-a use-after-free in the kernel's TCP handshake handling of IPv4 options. It is
-only reachable from the network when a SYN carries IP options, so dropping those
-packets blocks the trigger until a patched kernel is available.
 
 > [!WARNING]
 > **This does not protect hosts using NetLabel/CIPSO** (SELinux or Smack with a
