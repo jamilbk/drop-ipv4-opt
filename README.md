@@ -1,13 +1,16 @@
 # drop-ipv4-opt
 
-A tiny XDP program to mitigate [CVE-2026-98432](https://nvd.nist.gov/vuln/detail/cve-2026-98432),
+Two stopgaps to mitigate [CVE-2026-98432](https://nvd.nist.gov/vuln/detail/cve-2026-98432),
 a use-after-free in the kernel's TCP handshake handling of IPv4 options. On most
-hosts the bug can only be triggered by an incoming SYN that carries IP options
-(see the NetLabel/CIPSO exception below), so this program drops IPv4 packets
-with options before they're passed up the network stack to the kernel.
+hosts the bug can only be triggered by a SYN that carries IP options (see the
+NetLabel/CIPSO exception below), so the stopgaps drop IPv4 packets with options
+before the TCP code of the kernel sees them.
 
 A packet has IP options when its IHL (header length) field is greater than 5,
 which means the IPv4 header is longer than 20 bytes.
+
+The stopgaps are not a fix. The fix is a patched kernel. Use the stopgaps until
+you can upgrade.
 
 > [!WARNING]
 > **This may not protect hosts using NetLabel/CIPSO** (SELinux or Smack with a
@@ -17,7 +20,38 @@ which means the IPv4 header is longer than 20 bytes.
 > `netlabelctl map list` can help tell whether a host uses CIPSO: entries of
 > type `CIPSOV4` suggest it does.
 
-## What it does
+## Use both stopgaps
+
+Each stopgap covers traffic that the other stopgap does not cover well. Install
+the two stopgaps together.
+
+1. **The XDP program** drops packets at the network interface, before the
+   kernel network stack does work on them. It is very fast, so it is the best
+   tool for traffic from the network. But it only sees packets that come in
+   through the interface that you attach it to.
+2. **The nftables rules** drop packets in the kernel network stack. They cost
+   more CPU time for each packet, but they see local traffic, container
+   traffic, and tunneled traffic that the XDP program cannot see.
+
+With the two stopgaps installed, the XDP program drops the traffic from the
+network first. The nftables rules then only do work on the traffic that the XDP
+program did not see.
+
+| Traffic                                                        | XDP program | nftables rules |
+| -------------------------------------------------------------- | ----------- | -------------- |
+| Packets that come in through the attached interface            | Dropped     | Dropped        |
+| Loopback traffic                                               | Not seen    | Dropped        |
+| Packets that the host sends                                    | Not seen    | Dropped        |
+| Packets that the host unwraps from a tunnel (VXLAN, GRE, …)    | Not seen    | Dropped        |
+| Container traffic that the host receives or routes             | Not seen    | Dropped        |
+| Traffic that stays in the network namespace of a container     | Not seen    | Not seen       |
+| Bridge traffic that does not go through the nftables hooks     | Not seen    | Not seen       |
+
+The last two rows are gaps that stay open. Only a patched kernel closes them.
+
+## Stopgap 1: XDP for traffic from the network
+
+### What it does
 
 | Packet                       | Action     |
 | ---------------------------- | ---------- |
@@ -30,7 +64,7 @@ VLAN-tagged frames are handled too: the program skips up to two VLAN tags
 (802.1Q and 802.1ad/QinQ) before it checks for IPv4. Frames with more than two
 tags are passed through.
 
-## Requirements
+### Requirements
 
 On a Linux host:
 
@@ -51,7 +85,7 @@ Fedora:
 sudo dnf install clang llvm libbpf-devel kernel-headers iproute bpftool
 ```
 
-## Build
+### Build
 
 ```sh
 make
@@ -59,9 +93,10 @@ make
 
 This produces `drop_ipv4_opt.o`.
 
-## Attach to an interface
+### Attach to an interface
 
-Replace `eth0` with your interface name (see `ip link`).
+Replace `eth0` with your interface name (see `ip link`). If the host has more
+than one interface that faces the network, attach the program to each one.
 
 Native (driver) mode, which is the fastest:
 
@@ -81,14 +116,14 @@ Let the kernel pick the mode (native if supported, else generic):
 sudo ip link set dev eth0 xdp obj drop_ipv4_opt.o sec xdp
 ```
 
-## Check that it is attached
+### Check that it is attached
 
 ```sh
 ip link show dev eth0          # look for "xdp" / "prog/xdp id N"
 sudo bpftool net show dev eth0
 ```
 
-## Detach
+### Detach
 
 ```sh
 sudo ip link set dev eth0 xdp off
@@ -96,66 +131,89 @@ sudo ip link set dev eth0 xdp off
 
 Use `xdpdrv off` or `xdpgeneric off` if you attached in that specific mode.
 
-## Test
+## Stopgap 2: nftables for local, container, and tunneled traffic
 
-From another host, send a packet with an IP option, e.g. with the Record
-Route option:
+### What it does
 
-```sh
-ping -R <target-ip>
-```
+The rules in [`nft/drop_ipv4_options.nft`](nft/drop_ipv4_options.nft) drop each
+IPv4 packet with options on three paths of the host:
 
-With the program attached, these pings get no reply. A normal `ping
-<target-ip>` still works.
+| Path    | Traffic                                                             |
+| ------- | ------------------------------------------------------------------- |
+| Input   | Packets for the host, which includes loopback and unwrapped packets |
+| Forward | Packets that the host routes, such as container traffic             |
+| Output  | Packets that the host sends                                         |
 
-## Secondary stopgap: nftables
+The rules go into a table of their own, `inet drop_ipv4_options`. They do not
+change your other nftables rules.
 
-The XDP program only sees the packets that come in through the interface it is
-attached to. It does not see these packets:
+### Requirements
 
-- Loopback traffic
-- Traffic that the host sends
-- Traffic that the host unwraps from a tunnel, such as VXLAN, GRE, or WireGuard
+`nftables` (for the `nft` command). There is nothing to build.
 
-To drop these packets too, load the nftables rules in
-[`nft/drop_ipv4_options.nft`](nft/drop_ipv4_options.nft). The rules drop each
-IPv4 packet with options on the input, forward, and output paths of the host.
-The rules cost more CPU time for each packet than the XDP program, so use them
-together with the XDP program.
-
-Load the rules:
+### Load the rules
 
 ```sh
 sudo nft -f nft/drop_ipv4_options.nft
 ```
 
-The rules go into a table of their own, `inet drop_ipv4_options`. They do not
-change your other nftables rules.
+You can load the file again. The second load replaces the rules and does not
+add them again.
 
-Show the rules and the number of packets that each rule dropped:
+### Check that the rules are loaded
 
 ```sh
 sudo nft list table inet drop_ipv4_options
 ```
 
-Remove the rules:
+The output also shows the number of packets that each rule dropped.
 
-```sh
-sudo nft delete table inet drop_ipv4_options
-```
+### Keep the rules after a restart
 
 The rules do not stay after a restart. To keep them, copy the file to a
 location that your distribution loads at startup. For example, on Debian and
 Ubuntu, add an `include` line for the file to `/etc/nftables.conf` and enable
 `nftables.service`.
 
-The nftables rules have these limits:
+### Remove the rules
 
-- They do not see traffic that stays in a different network namespace, such as
-  loopback traffic in a container.
-- They do not see bridge traffic that does not go through these hooks.
-- They do not protect hosts that use NetLabel/CIPSO. On those hosts, the output
-  rule also drops the labeled packets that the host sends.
+```sh
+sudo nft delete table inet drop_ipv4_options
+```
+
+## Test
+
+Test each stopgap with a ping that carries the Record Route option.
+
+To test the XDP program, send the ping from another host:
+
+```sh
+ping -R <target-ip>
+```
+
+To test the nftables rules, send the ping on the host itself:
+
+```sh
+ping -R 127.0.0.1
+```
+
+With the stopgap in place, these pings get no reply. A normal ping without
+`-R` still works.
+
+## Limits
+
+The two stopgaps together do not close these gaps:
+
+- **Other network namespaces.** Neither stopgap sees traffic that stays in a
+  different network namespace, such as loopback traffic in a container.
+- **Bridge traffic.** Neither stopgap sees bridge traffic that does not go
+  through the nftables hooks, such as traffic between two containers on one
+  bridge.
+- **NetLabel/CIPSO.** On hosts that use NetLabel/CIPSO, the kernel attaches the
+  option itself, so the stopgaps do not stop the bug. The nftables output rule
+  also drops the labeled packets that the host sends.
+
+Upgrade to a patched kernel to close these gaps.
 
 ## License
 
