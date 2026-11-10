@@ -1,0 +1,26 @@
+#!/usr/sbin/nft -f
+
+# Drop each IPv4 packet that has IP options (IHL > 5) on the input, forward,
+# and output paths of the host.
+
+# Create the table if it does not exist, then delete it. As a result, a second
+# load of this file replaces the rules and does not add them again.
+table inet drop_ipv4_options
+delete table inet drop_ipv4_options
+
+table inet drop_ipv4_options {
+    chain input {
+        type filter hook input priority -310; policy accept;
+        ip hdrlength > 5 counter drop
+    }
+
+    chain forward {
+        type filter hook forward priority -310; policy accept;
+        ip hdrlength > 5 counter drop
+    }
+
+    chain output {
+        type filter hook output priority -310; policy accept;
+        ip hdrlength > 5 counter drop
+    }
+}

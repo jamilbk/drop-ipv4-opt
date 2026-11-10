@@ -108,6 +108,55 @@ ping -R <target-ip>
 With the program attached, these pings get no reply. A normal `ping
 <target-ip>` still works.
 
+## Secondary stopgap: nftables
+
+The XDP program only sees the packets that come in through the interface it is
+attached to. It does not see these packets:
+
+- Loopback traffic
+- Traffic that the host sends
+- Traffic that the host unwraps from a tunnel, such as VXLAN, GRE, or WireGuard
+
+To drop these packets too, load the nftables rules in
+[`nft/drop_ipv4_options.nft`](nft/drop_ipv4_options.nft). The rules drop each
+IPv4 packet with options on the input, forward, and output paths of the host.
+The rules cost more CPU time for each packet than the XDP program, so use them
+together with the XDP program.
+
+Load the rules:
+
+```sh
+sudo nft -f nft/drop_ipv4_options.nft
+```
+
+The rules go into a table of their own, `inet drop_ipv4_options`. They do not
+change your other nftables rules.
+
+Show the rules and the number of packets that each rule dropped:
+
+```sh
+sudo nft list table inet drop_ipv4_options
+```
+
+Remove the rules:
+
+```sh
+sudo nft delete table inet drop_ipv4_options
+```
+
+The rules do not stay after a restart. To keep them, copy the file to a
+location that your distribution loads at startup. For example, on Debian and
+Ubuntu, add an `include` line for the file to `/etc/nftables.conf` and enable
+`nftables.service`.
+
+The nftables rules have these limits:
+
+- They do not see traffic that stays in a different network namespace, such as
+  loopback traffic in a container.
+- They do not see bridge traffic that does not go through these hooks.
+- They do not protect hosts that use NetLabel/CIPSO. On those hosts, the output
+  rule also drops the labeled packets that the host sends.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
